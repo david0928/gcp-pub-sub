@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": ".NET Launch (PubSub Emulator)",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/GcpPubSubDemo/bin/Debug/net8.0/GcpPubSubDemo.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PUBSUB_EMULATOR_HOST": "localhost:8085"
+      },
+      "preLaunchTask": "build"
+    },
+    {
+      "name": ".NET Launch (Release + Emulator)",
+      "type": "coreclr",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/GcpPubSubDemo/bin/Release/net8.0/GcpPubSubDemo.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": {
+        "PUBSUB_EMULATOR_HOST": "localhost:8085"
+      },
+      "preLaunchTask": "build:release"
+    }
+  ]
+}

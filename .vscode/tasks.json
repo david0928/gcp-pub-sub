@@ -1,0 +1,38 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build",
+      "command": "dotnet",
+      "type": "shell",
+      "args": ["build", "GcpPubSubDemo.sln", "-c", "Debug"],
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "options": {
+        "env": { "PUBSUB_EMULATOR_HOST": "localhost:8085" }
+      }
+    },
+    {
+      "label": "build:release",
+      "command": "dotnet",
+      "type": "shell",
+      "args": ["build", "GcpPubSubDemo.sln", "-c", "Release"],
+      "group": "build",
+      "problemMatcher": ["$msCompile"],
+      "options": {
+        "env": { "PUBSUB_EMULATOR_HOST": "localhost:8085" }
+      }
+    },
+    {
+      "label": "test",
+      "command": "dotnet",
+      "type": "shell",
+      "args": ["test", "tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj", "-c", "Debug"],
+      "group": "test",
+      "problemMatcher": ["$msCompile"],
+      "options": {
+        "env": { "PUBSUB_EMULATOR_HOST": "localhost:8085" }
+      }
+    }
+  ]
+}

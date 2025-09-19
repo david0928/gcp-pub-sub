@@ -1,0 +1,9 @@
+{
+  "terminal.integrated.env.linux": {
+    "PUBSUB_EMULATOR_HOST": "localhost:8085"
+  },
+  "terminal.integrated.env.windows": {
+    "PUBSUB_EMULATOR_HOST": "localhost:8085" 
+  },
+  "dotnet.defaultSolution": "GcpPubSubDemo.sln"
+}

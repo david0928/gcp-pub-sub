@@ -11,7 +11,6 @@ obj/
 *.csproj.user
 
 ## IDE
-.vscode/
 .idea/
 *.swp
 
