@@ -1,0 +1,45 @@
+## Build artifacts
+bin/
+obj/
+**/bin/
+**/obj/
+
+## User specific
+*.user
+*.suo
+*.userprefs
+*.csproj.user
+
+## IDE
+.vscode/
+.idea/
+*.swp
+
+## Logs / temp
+*.log
+logs/
+tmp/
+temp/
+
+## Dotnet artifacts
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Tests / coverage
+TestResults/
+coverage*
+*.coverage
+*.coveragexml
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## Tooling
+/.vs/
+node_modules/
+
+## Secrets (example)
+*.secret.json
+appsettings.*.local.json

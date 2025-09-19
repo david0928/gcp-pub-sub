@@ -1,0 +1,16 @@
+version: '3.9'
+services:
+  pubsub:
+    image: gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+    container_name: pubsub-emulator
+    command: ["gcloud", "beta", "emulators", "pubsub", "start", "--host-port=0.0.0.0:8085", "--project=demo-project"]
+    ports:
+      - "8085:8085"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8085/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - ./emulator-init.sh:/workspace/emulator-init.sh
+    entrypoint: ["/bin/bash", "-c", "gcloud beta emulators pubsub start --host-port=0.0.0.0:8085 --project=demo-project & while ! curl -s localhost:8085 >/dev/null; do sleep 1; done; bash /workspace/emulator-init.sh; wait"]
