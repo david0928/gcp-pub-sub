@@ -35,6 +35,7 @@ builder.Services.AddSingleton(provider => new SubscriberServiceApiClientBuilder
 
 builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
 builder.Services.AddHostedService<PubSubSubscriber>();
+builder.Services.AddHostedService<PubSubStreamingSubscriber>();
 builder.Services.AddSingleton<IPubSubBootstrap, PubSubBootstrap>();
 
 var host = builder.Build();
@@ -52,6 +53,10 @@ await host.StartAsync();
 // 簡單示範發送一則訊息
 var publisher = host.Services.GetRequiredService<IPubSubPublisher>();
 await publisher.PublishAsync($"Hello Pub/Sub @ {DateTimeOffset.UtcNow:O}");
+
+var pubsubSettings = host.Services.GetRequiredService<PubSubSettings>();
+logger.LogInformation("Publisher is sending to topic {Topic} in project {Project}", pubsubSettings.TopicId, pubsubSettings.ProjectId);
+logger.LogInformation("Subscriber is receiving from subscription {Subscription} in project {Project}", pubsubSettings.SubscriptionId, pubsubSettings.ProjectId);
 
 logger.LogInformation("Press Ctrl+C to exit...");
 try

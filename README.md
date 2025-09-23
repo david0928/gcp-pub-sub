@@ -29,6 +29,7 @@ docker compose up -d --build
 * `PubSubBootstrap` 啟動時確保 Topic / Subscription 存在
 * `PubSubPublisher` 發佈訊息（附加 `published_at` 屬性）
 * `PubSubSubscriber` 背景服務以迴圈方式 Pull + Ack（簡化 emulator 範例）
+* `PubSubStreamingSubscriber` 使用 StreamingPull 持續接收並即時 Ack
 * Docker Compose 自動啟動 Emulator 並可直接測試
 * 單元測試模擬 `PublisherServiceApiClient` 回傳 Publish Id
 
@@ -41,7 +42,8 @@ docker compose up -d --build
 │                        │                      │  Topic: demo-topic           │
 │  - PubSubBootstrap     │ ◀── Pull & Ack ───── │  Subscription: demo-sub      │
 │  - PubSubPublisher     │                      └──────────────────────────────┘
-│  - PubSubSubscriber    │
+│  - PubSubSubscriber    │  (Pull)
+│  - PubSubStreamingSubscriber (StreamingPull)
 └────────────────────────┘
 ```
 流程：
@@ -145,6 +147,9 @@ dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj \
 
 ---
 ## 常見問題 FAQ
+**Q: Pull 與 StreamingPull 差異？**  
+A: Pull 是「請求-回應」輪詢模式，適合簡單與低流量測試；StreamingPull 維持一條雙向串流，延遲更低且吞吐較佳，適合正式或高頻需求。
+
 **Q: 執行時顯示 Topic not found?**  
 A: 可能是在 bootstrap 之前就手動呼叫 Publisher，或 emulator 尚未初始化完成。請確認啟動順序與日誌。
 
