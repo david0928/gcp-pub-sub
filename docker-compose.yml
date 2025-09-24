@@ -1,7 +1,7 @@
 version: '3.9'
 services:
   pubsub:
-    image: gcr.io/google.com/cloudsdktool/cloud-sdk:latest
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     container_name: pubsub-emulator
     command: ["gcloud", "beta", "emulators", "pubsub", "start", "--host-port=0.0.0.0:8085", "--project=demo-project"]
     ports:
