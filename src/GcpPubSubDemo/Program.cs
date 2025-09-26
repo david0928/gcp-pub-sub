@@ -1,6 +1,6 @@
 using GcpPubSubDemo;
+using Google.Api.Gax;
 using Google.Cloud.PubSub.V1;
-using Grpc.Net.Client;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -25,17 +25,34 @@ Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", emulatorEndpoint);
 // 使用官方 Builder 自動偵測 PUBSUB_EMULATOR_HOST 來建立 Client
 builder.Services.AddSingleton(provider => new PublisherServiceApiClientBuilder
 {
-    EmulatorDetection = Google.Api.Gax.EmulatorDetection.EmulatorOnly
+    EmulatorDetection = EmulatorDetection.EmulatorOnly
 }.Build());
 
 builder.Services.AddSingleton(provider => new SubscriberServiceApiClientBuilder
 {
-    EmulatorDetection = Google.Api.Gax.EmulatorDetection.EmulatorOnly
+    EmulatorDetection = EmulatorDetection.EmulatorOnly
+}.Build());
+
+// 新增：註冊高階 SubscriberClient（給 StartAsync 版本使用）
+builder.Services.AddSingleton(provider => new SubscriberClientBuilder
+{
+    SubscriptionName = SubscriptionName.FromProjectSubscription(pubSubSettings.ProjectId, pubSubSettings.SubscriptionId),
+    EmulatorDetection = EmulatorDetection.EmulatorOnly,
+    Settings = new SubscriberClient.Settings
+    {
+        FlowControlSettings = new FlowControlSettings(
+            maxOutstandingElementCount: 1, // 限制同時處理訊息數量為 1（模擬單線程處理）
+            maxOutstandingByteCount: 10 * 1024 * 1024) // 10MB
+    }
 }.Build());
 
 builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
+
+// 註冊三種 Subscriber 背景服務
 builder.Services.AddHostedService<PubSubSubscriber>();
 builder.Services.AddHostedService<PubSubStreamingSubscriber>();
+builder.Services.AddHostedService<PubSubStartAsyncSubscriber>();
+
 builder.Services.AddSingleton<IPubSubBootstrap, PubSubBootstrap>();
 
 var host = builder.Build();

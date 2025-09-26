@@ -1,28 +1,36 @@
-docker compose up -d --build
 # GCP Pub/Sub .NET 8 Console Demo
 
 一個使用 **.NET 8** 與 **Google.Cloud.PubSub.V1** 官方 SDK 的主控台範例，整合 **Pub/Sub Emulator (Docker)**，示範：
 
 * 發送訊息 (Publish)
 * 以背景服務長期拉取 (Pull) 訂閱並 Ack
+* 使用 StreamingPull 持續接收訊息
+* 使用高階 API StartAsync 簡化訂閱邏輯
 * 啟動時自動建立 Topic / Subscription（若不存在）
 * 單元測試 (NUnit + NSubstitute)
 
 ---
 ## 目錄
 - [GCP Pub/Sub .NET 8 Console Demo](#gcp-pubsub-net-8-console-demo)
-  - [目錄](#目錄)
-  - [功能特色](#功能特色)
-  - [架構概念](#架構概念)
-  - [專案結構](#專案結構)
-  - [環境需求](#環境需求)
-  - [快速開始](#快速開始)
-  - [執行與觀察](#執行與觀察)
-  - [測試與覆蓋率](#測試與覆蓋率)
-  - [設定說明](#設定說明)
-  - [常見問題 FAQ](#常見問題-faq)
-  - [延伸方向](#延伸方向)
-  - [授權](#授權)
+	- [目錄](#目錄)
+	- [功能特色](#功能特色)
+	- [架構概念](#架構概念)
+	- [專案結構](#專案結構)
+	- [環境需求](#環境需求)
+	- [快速開始](#快速開始)
+	- [執行與觀察](#執行與觀察)
+	- [測試與覆蓋率](#測試與覆蓋率)
+	- [設定說明](#設定說明)
+	- [常見問題 FAQ](#常見問題-faq)
+	- [三種訂閱實作比較](#三種訂閱實作比較)
+		- [1. Pull (`SubscriberServiceApiClient.Pull`)](#1-pull-subscriberserviceapiclientpull)
+		- [2. StreamingPull（手寫串流 `StreamingPull`）](#2-streamingpull手寫串流-streamingpull)
+		- [3. `SubscriberClient.StartAsync`（高階封裝）](#3-subscriberclientstartasync高階封裝)
+		- [選用建議](#選用建議)
+		- [補充：Ack 策略](#補充ack-策略)
+		- [總結](#總結)
+	- [延伸方向](#延伸方向)
+	- [授權](#授權)
 
 ---
 ## 功能特色
@@ -30,6 +38,7 @@ docker compose up -d --build
 * `PubSubPublisher` 發佈訊息（附加 `published_at` 屬性）
 * `PubSubSubscriber` 背景服務以迴圈方式 Pull + Ack（簡化 emulator 範例）
 * `PubSubStreamingSubscriber` 使用 StreamingPull 持續接收並即時 Ack
+* `PubSubStartAsyncSubscriber` 使用高階 API StartAsync，簡化訂閱邏輯與流量控制
 * Docker Compose 自動啟動 Emulator 並可直接測試
 * 單元測試模擬 `PublisherServiceApiClient` 回傳 Publish Id
 
@@ -44,13 +53,14 @@ docker compose up -d --build
 │  - PubSubPublisher     │                      └──────────────────────────────┘
 │  - PubSubSubscriber    │  (Pull)
 │  - PubSubStreamingSubscriber (StreamingPull)
+│  - PubSubStartAsyncSubscriber (StartAsync)    │
 └────────────────────────┘
 ```
 流程：
 1. 啟動 → 設定 `PUBSUB_EMULATOR_HOST`
 2. Bootstrap：檢查 / 建立 Topic & Subscription
 3. 發佈一則示範訊息
-4. 背景服務開始持續 Pull → 解析 → Ack
+4. 背景服務開始持續 Pull 或 StreamingPull 或 StartAsync → 解析 → Ack
 
 ---
 ## 專案結構
@@ -63,6 +73,8 @@ src/
 		Program.cs
 		PubSubBootstrap.cs
 		PubSubPublisher.cs
+		PubSubStartAsyncSubscriber.cs
+		PubSubStreamingSubscriber.cs
 		PubSubSubscriber.cs
 		AppSettings.cs
 		appsettings.json
@@ -80,14 +92,14 @@ tests/
 ---
 ## 快速開始
 1. 啟動 Emulator：
-	 ```bash
-	 docker compose up -d
-	 ```
+```bash
+docker compose up -d --build
+```
 2. 設定環境變數並執行：
-	 ```bash
-	 export PUBSUB_EMULATOR_HOST=localhost:8085
-	 dotnet run --project src/GcpPubSubDemo/GcpPubSubDemo.csproj -c Release
-	 ```
+```bash
+export PUBSUB_EMULATOR_HOST=localhost:8085
+dotnet run --project src/GcpPubSubDemo/GcpPubSubDemo.csproj -c Release
+```
 3. 看到輸出包含：`Created topic` / `Created subscription` / `Published message` / `Received message` 即成功。
 
 Windows PowerShell：
@@ -116,12 +128,11 @@ docker logs -f pubsub-emulator | head -n 50
 dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj -c Release
 ```
 
-收集覆蓋率 (
-需已安裝 coverlet.collector)：
+收集覆蓋率（需已安裝 coverlet.collector）：
 ```bash
 dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj \
-	-c Release \
-	--collect:"XPlat Code Coverage"
+  -c Release \
+  --collect:"XPlat Code Coverage"
 ```
 結果會輸出 `coverage.cobertura.xml`。
 
@@ -164,6 +175,65 @@ A: 移除環境變數 `PUBSUB_EMULATOR_HOST`，並提供服務帳戶 JSON 憑證
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/path/key.json
 ```
+
+---
+## 三種訂閱實作比較
+
+本範例同時示範三種接收訊息方式：`PubSubSubscriber` (Pull) / `PubSubStreamingSubscriber` (StreamingPull) / `PubSubStartAsyncSubscriber` (`SubscriberClient.StartAsync`)。以下比較其差異：
+
+### 1. Pull (`SubscriberServiceApiClient.Pull`)
+優點：
+* 實作最直覺、邏輯可見（便於教學 / 除錯）
+* 可精準控制每次拉取數量（例如設定 `MaxMessages`）
+* 沒有長連線；對於非常低流量或偶發測試足夠
+缺點：
+* 延遲較高（輪詢間隔 + RPC 往返）
+* 吞吐量受限（大量訊息時會造成頻繁 RPC）
+* 需自行處理 backoff、錯誤重試、Ack/Nack
+* 不適合高頻或需要低延遲的生產情境
+
+適用情境：PoC / 教學 / Emulator 測試 / 低量非即時。
+
+### 2. StreamingPull（手寫串流 `StreamingPull`）
+優點：
+* 單一長連線，低延遲、高吞吐
+* 可批次 Ack，降低 RPC 開銷
+* 可自行擴充 flow control、並行處理設計
+缺點：
+* 需管理串流生命週期、錯誤恢復、重連
+* 實作複雜度較高，錯誤處理細節多
+* 容易忽略流量控制或 Ack 超時的細節
+
+適用情境：需要較低延遲或中高吞吐且希望完全掌控行為的服務。
+
+### 3. `SubscriberClient.StartAsync`（高階封裝）
+優點：
+* 官方建議的高階 API，內建串流管理 / 自動重連 / 流量控制
+* 以 callback 形式處理訊息；回傳 Ack / Nack 即可
+* 需要的程式碼最少，可快速上線
+* 預設並行度 + 可調整設定（`SubscriberClient.Settings` / `SubscriptionSettings` 等）
+缺點：
+* 彈性比手寫 StreamingPull 低（某些細節參數無法完全操控）
+* Callback 內長時間阻塞會影響吞吐（需自行分派工作或使用非同步 I/O）
+* 除錯時需要熟悉內部抽象；較難觀察底層 Streaming 狀態
+
+適用情境：大多數實務生產服務（除非有極端特殊需求需要手寫 StreamingPull）。
+
+### 選用建議
+| 需求                               | 建議方案                                                   |
+| ---------------------------------- | ---------------------------------------------------------- |
+| 教學 / Demo / Emulator             | Pull                                                       |
+| 低量、對延遲不敏感                 | Pull 或 StartAsync                                         |
+| 一般後端服務（預設）               | StartAsync                                                 |
+| 高度客製 Flow Control / Ack 策略   | StreamingPull 手寫                                         |
+| 需要最低延遲 + 高吞吐 + 可觀測細節 | StreamingPull 或 StartAsync（先用 StartAsync，再評估優化） |
+
+### 補充：Ack 策略
+* Pull / StreamingPull：你決定何時送出 `Acknowledge` 或在 Streaming 中送 Ack Id。
+* StartAsync：回傳 `SubscriberClient.Reply.Ack / Nack`，簡化控制；若需延遲 Ack，可在 callback 內交由其他工作處理後再決定，但要避免超時（預設 Ack Deadline）。
+
+### 總結
+若只是要「穩定收訊息」且沒有太特殊需求，直接使用 `SubscriberClient.StartAsync` 即可；Pull 適合學習與快速驗證；StreamingPull 手寫版保留最大彈性，適用需要深入優化或觀測的情境。
 
 ---
 ## 延伸方向
