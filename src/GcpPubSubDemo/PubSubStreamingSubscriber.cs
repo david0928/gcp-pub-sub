@@ -30,7 +30,8 @@ public sealed class PubSubStreamingSubscriber : BackgroundService
                 await streaming.WriteAsync(new StreamingPullRequest
                 {
                     SubscriptionAsSubscriptionName = _subscriptionName,
-                    StreamAckDeadlineSeconds = 60
+                    StreamAckDeadlineSeconds = 60,
+                    MaxOutstandingMessages = 1,
                 });
 
                 var responseStream = streaming.GetResponseStream();

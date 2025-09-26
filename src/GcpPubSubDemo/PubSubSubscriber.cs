@@ -31,7 +31,7 @@ public sealed class PubSubSubscriber : BackgroundService, IPubSubSubscriber
                 var pullRequest = new PullRequest
                 {
                     SubscriptionAsSubscriptionName = _subscriptionName,
-                    MaxMessages = 20
+                    MaxMessages = 1
                 };
                 var response = await _subscriberClient.PullAsync(pullRequest, cancellationToken: stoppingToken);
                 if (response.ReceivedMessages.Count == 0)

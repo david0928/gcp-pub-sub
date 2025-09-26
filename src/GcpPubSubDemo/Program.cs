@@ -34,7 +34,7 @@ builder.Services.AddSingleton(provider => new SubscriberServiceApiClientBuilder
 }.Build());
 
 builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
-//builder.Services.AddHostedService<PubSubSubscriber>();
+builder.Services.AddHostedService<PubSubSubscriber>();
 builder.Services.AddHostedService<PubSubStreamingSubscriber>();
 builder.Services.AddSingleton<IPubSubBootstrap, PubSubBootstrap>();
 
