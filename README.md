@@ -30,6 +30,7 @@
 		- [補充：Ack 策略](#補充ack-策略)
 		- [總結](#總結)
 	- [延伸方向](#延伸方向)
+	- [GCP IAM 權限 (Publisher / Subscriber / Bootstrap)](#gcp-iam-權限-publisher--subscriber--bootstrap)
 	- [授權](#授權)
 
 ---
@@ -144,7 +145,9 @@ dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj \
 	"PubSub": {
 		"ProjectId": "demo-project",
 		"TopicId": "demo-topic",
-		"SubscriptionId": "demo-sub"
+		"SubscriptionId": "demo-sub",
+		"UseEmulator": true,            // true = 使用本機 emulator；false = 連正式 GCP
+		"CredentialsPath": null         // 當 UseEmulator=false 且提供路徑時，使用該 service account JSON；為 null 則走 ADC
 	},
 	"Emulator": {
 		"Host": "localhost",
@@ -152,9 +155,12 @@ dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj \
 	}
 }
 ```
-調整：
+
+行為說明：
 * 改變 Topic/Subscription 名稱後需刪除舊容器或重新建立資源
-* 若要連真實 GCP：移除 `PUBSUB_EMULATOR_HOST`，並設定憑證 (`GOOGLE_APPLICATION_CREDENTIALS`)
+* UseEmulator=true：設定 `PUBSUB_EMULATOR_HOST`，並清除 `GOOGLE_APPLICATION_CREDENTIALS`。
+* UseEmulator=false：清除 `PUBSUB_EMULATOR_HOST`；若 `CredentialsPath` 有值則設定 `GOOGLE_APPLICATION_CREDENTIALS`，否則依 Application Default Credentials (ADC) 尋找（例如 gcloud login 或執行環境提供的 metadata）。
+* 三種 Subscriber / Publisher 都共用相同偵測邏輯 (`EmulatorDetection = EmulatorOnly / ProductionOnly`)。
 
 ---
 ## 常見問題 FAQ
@@ -243,6 +249,63 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/key.json
 * JSON Schema 與驗證
 * 整合 OpenTelemetry (Tracing / Metrics / Logging)
 * 健康檢查 + Ready/Liveness Probe (若容器化)
+
+---
+## GCP IAM 權限 (Publisher / Subscriber / Bootstrap)
+
+在連接正式 GCP 時，建議為不同職能的 service account 授予最小必要權限。以下為範例預設角色與必要權限說明，亦提供 gcloud 指令範例。
+
+注意：使用 Pub/Sub Emulator 時不需要這些 IAM 權限。
+
+- Publisher（發佈訊息）
+  - 建議角色：roles/pubsub.publisher
+  - 主要權限：pubsub.topics.publish（允許將訊息發佈到 Topic）
+  - gcloud 範例：
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="serviceAccount:YOUR_PUBLISHER_SA@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+      --role="roles/pubsub.publisher"
+    ```
+
+- Subscriber（拉取並 Ack 訊息）
+  - 建議角色：roles/pubsub.subscriber
+  - 主要權限：pubsub.subscriptions.consume / pubsub.subscriptions.pull / pubsub.subscriptions.acknowledge（允許 pull、ack/nack）
+  - gcloud 範例：
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="serviceAccount:YOUR_SUBSCRIBER_SA@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+      --role="roles/pubsub.subscriber"
+    ```
+
+- PubSubBootstrap（建立 / 檢查 Topic 與 Subscription）
+  - 建議角色（部署階段或 bootstrap 專用）：roles/pubsub.admin
+  - 主要權限（可建立或修改 Topic / Subscription）：pubsub.topics.create, pubsub.subscriptions.create, pubsub.topics.get, pubsub.subscriptions.get 等
+  - 若不希望賦予完整 admin，可建立自訂角色，僅包含：
+    - pubsub.topics.create
+    - pubsub.subscriptions.create
+    - pubsub.topics.get
+    - pubsub.subscriptions.get
+  - gcloud 範例（臨時授權或部署帳號）：
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="serviceAccount:YOUR_BOOTSTRAP_SA@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+      --role="roles/pubsub.admin"
+    ```
+
+- 僅檢查 Topic / Subscription 是否存在
+  - 若僅需檢查資源存在性（例如 bootstrap 只做 get），可授予較低權限：roles/pubsub.viewer
+  - 主要權限範例：pubsub.topics.get、pubsub.subscriptions.get（不包含建立或發佈/消費權限）
+  - gcloud 範例：
+    ```bash
+    gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+      --member="serviceAccount:YOUR_VIEWER_SA@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+      --role="roles/pubsub.viewer"
+    ```
+
+小提醒：
+- 若希望更嚴格的最小權限，考慮為 bootstrap 階段使用單獨的 SA（只在部署時授權），運行後撤銷或只賦予必要的 create/get 權限。
+- 在生產環境建議使用不同 service account／角色來分離發佈與消費職責，避免單一帳號擁有過多權限。
+- 若使用 ADC（Application Default Credentials）或在 GKE / Cloud Run 等環境，請確保執行環境的 Compute Service Account 也被授予相應角色。
 
 ---
 ## 授權

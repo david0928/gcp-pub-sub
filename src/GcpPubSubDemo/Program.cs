@@ -18,33 +18,72 @@ builder.Services.AddSingleton(pubSubSettings);
 
 builder.Services.AddLogging(lb => lb.AddConsole());
 
-// 設定 Emulator endpoint
+var basePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AppDomain.CurrentDomain.RelativeSearchPath ?? "");
+string? credentialsPath = null;
+if (!string.IsNullOrWhiteSpace(pubSubSettings.CredentialsPath))
+    credentialsPath = Path.Combine(basePath, pubSubSettings.CredentialsPath);
+
+// 設定 Emulator endpoint（僅在 UseEmulator = true 時設定）
 string emulatorEndpoint = $"{emulatorSettings.Host}:{emulatorSettings.Port}";
-Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", emulatorEndpoint);
-
-// 使用官方 Builder 自動偵測 PUBSUB_EMULATOR_HOST 來建立 Client
-builder.Services.AddSingleton(provider => new PublisherServiceApiClientBuilder
+if (pubSubSettings.UseEmulator)
 {
-    EmulatorDetection = EmulatorDetection.EmulatorOnly
-}.Build());
-
-builder.Services.AddSingleton(provider => new SubscriberServiceApiClientBuilder
+    Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", emulatorEndpoint);
+    // 清掉可能殘留的正式憑證環境變數以避免干擾
+    Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", null);
+}
+else
 {
-    EmulatorDetection = EmulatorDetection.EmulatorOnly
-}.Build());
-
-// 新增：註冊高階 SubscriberClient（給 StartAsync 版本使用）
-builder.Services.AddSingleton(provider => new SubscriberClientBuilder
-{
-    SubscriptionName = SubscriptionName.FromProjectSubscription(pubSubSettings.ProjectId, pubSubSettings.SubscriptionId),
-    EmulatorDetection = EmulatorDetection.EmulatorOnly,
-    Settings = new SubscriberClient.Settings
+    // 確保不使用 emulator
+    Environment.SetEnvironmentVariable("PUBSUB_EMULATOR_HOST", null);
+    if (!string.IsNullOrWhiteSpace(credentialsPath))
     {
-        FlowControlSettings = new FlowControlSettings(
-            maxOutstandingElementCount: 1, // 限制同時處理訊息數量為 1（模擬單線程處理）
-            maxOutstandingByteCount: 10 * 1024 * 1024) // 10MB
+        Environment.SetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
     }
-}.Build());
+}
+
+// 根據 UseEmulator 選擇 EmulatorDetection 與憑證
+var detection = pubSubSettings.UseEmulator ? EmulatorDetection.EmulatorOnly : EmulatorDetection.ProductionOnly;
+
+builder.Services.AddSingleton(provider =>
+{
+    var b = new PublisherServiceApiClientBuilder { EmulatorDetection = detection };
+    if (!pubSubSettings.UseEmulator && !string.IsNullOrWhiteSpace(credentialsPath))
+    {
+        b.CredentialsPath = credentialsPath;
+    }
+    return b.Build();
+});
+
+builder.Services.AddSingleton(provider =>
+{
+    var b = new SubscriberServiceApiClientBuilder { EmulatorDetection = detection };
+    if (!pubSubSettings.UseEmulator && !string.IsNullOrWhiteSpace(credentialsPath))
+    {
+        b.CredentialsPath = credentialsPath;
+    }
+    return b.Build();
+});
+
+// 高階 SubscriberClient (StartAsync)
+builder.Services.AddSingleton(provider =>
+{
+    var b = new SubscriberClientBuilder
+    {
+        SubscriptionName = SubscriptionName.FromProjectSubscription(pubSubSettings.ProjectId, pubSubSettings.SubscriptionId),
+        EmulatorDetection = detection,
+        Settings = new SubscriberClient.Settings
+        {
+            FlowControlSettings = new FlowControlSettings(
+                maxOutstandingElementCount: 1,
+                maxOutstandingByteCount: 10 * 1024 * 1024)
+        }
+    };
+    if (!pubSubSettings.UseEmulator && !string.IsNullOrWhiteSpace(credentialsPath))
+    {
+        b.CredentialsPath = credentialsPath;
+    }
+    return b.Build();
+});
 
 builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
 
@@ -59,11 +98,17 @@ var host = builder.Build();
 
 var logger = host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
 
-logger.LogInformation("Starting host with Pub/Sub emulator at {Endpoint}", emulatorEndpoint);
+if (pubSubSettings.UseEmulator)
+    logger.LogInformation("Starting host with Pub/Sub emulator at {Endpoint}", emulatorEndpoint);
+else
+    logger.LogInformation("Starting host targeting GCP project {ProjectId} (production mode)", pubSubSettings.ProjectId);
 
-// 啟動前確保 Topic / Subscription 存在
-var bootstrap = host.Services.GetRequiredService<IPubSubBootstrap>();
-await bootstrap.EnsureInfrastructureAsync();
+// 啟動前確保 Topic / Subscription 存在 (Production 需要 GCP Pub/Sub 服務帳戶的 Viewer 權限，僅在 UseEmulator = true 時執行)
+if (pubSubSettings.UseEmulator)
+{
+    var bootstrap = host.Services.GetRequiredService<IPubSubBootstrap>();
+    await bootstrap.EnsureInfrastructureAsync();
+}
 
 await host.StartAsync();
 
