@@ -75,7 +75,12 @@ builder.Services.AddSingleton(provider =>
         {
             FlowControlSettings = new FlowControlSettings(
                 maxOutstandingElementCount: 1,
-                maxOutstandingByteCount: 10 * 1024 * 1024)
+                maxOutstandingByteCount: 10 * 1024 * 1024),
+            // 定義 Ack 過期時間
+            // - AckDeadline：預設 10 秒，最長 600 秒
+            // - MaxTotalAckExtension: 預設 60 分鐘，最長受 Subscription 的 message retention 約束 (Subscription 預設 7 天) 
+            AckDeadline = TimeSpan.FromSeconds(60),
+            MaxTotalAckExtension = TimeSpan.FromMinutes(120),
         }
     };
     if (!pubSubSettings.UseEmulator && !string.IsNullOrWhiteSpace(credentialsPath))
