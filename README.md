@@ -22,12 +22,12 @@
 	- [測試與覆蓋率](#測試與覆蓋率)
 	- [設定說明](#設定說明)
 	- [常見問題 FAQ](#常見問題-faq)
+	- [PublisherClient 與 PublisherServiceApiClient 差異](#publisherclient-與-publisherserviceapiclient-差異)
 	- [三種訂閱實作比較](#三種訂閱實作比較)
 		- [1. Pull (`SubscriberServiceApiClient.Pull`)](#1-pull-subscriberserviceapiclientpull)
 		- [2. StreamingPull（手寫串流 `StreamingPull`）](#2-streamingpull手寫串流-streamingpull)
 		- [3. `SubscriberClient.StartAsync`（高階封裝）](#3-subscriberclientstartasync高階封裝)
-		- [選用建議](#選用建議)
-		- [補充：Ack 策略](#補充ack-策略)
+		- [StartAsync 與手寫 StreamingPull 差異](#startasync-與手寫-streamingpull-差異)
 		- [總結](#總結)
 	- [延伸方向](#延伸方向)
 	- [GCP IAM 權限 (Publisher / Subscriber / Bootstrap)](#gcp-iam-權限-publisher--subscriber--bootstrap)
@@ -73,6 +73,7 @@ src/
 	GcpPubSubDemo/
 		Program.cs
 		PubSubBootstrap.cs
+		PubSubHighLevelPublisher.cs
 		PubSubPublisher.cs
 		PubSubStartAsyncSubscriber.cs
 		PubSubStreamingSubscriber.cs
@@ -146,8 +147,9 @@ dotnet test tests/GcpPubSubDemo.Tests/GcpPubSubDemo.Tests.csproj \
 		"ProjectId": "demo-project",
 		"TopicId": "demo-topic",
 		"SubscriptionId": "demo-sub",
-		"UseEmulator": true,            // true = 使用本機 emulator；false = 連正式 GCP
-		"CredentialsPath": null         // 當 UseEmulator=false 且提供路徑時，使用該 service account JSON；為 null 則走 ADC
+		"UseEmulator": true,             // true = 使用本機 emulator；false = 連正式 GCP
+		"CredentialsPath": null,         // 當 UseEmulator=false 且提供路徑時，使用該 service account JSON；為 null 則走 ADC
+    	"UseHighLevelPublisher": false	 // 是否使用高階 PublisherClient (具備 batching / 背景 flush)。false 則使用低階 PublisherServiceApiClient
 	},
 	"Emulator": {
 		"Host": "localhost",
@@ -181,6 +183,64 @@ A: 移除環境變數 `PUBSUB_EMULATOR_HOST`，並提供服務帳戶 JSON 憑證
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/path/key.json
 ```
+
+---
+## PublisherClient 與 PublisherServiceApiClient 差異
+兩者關係類似 StartAsync(高階) 與 手寫 StreamingPull(低階) 的概念，但作用在「發佈」。  
+`PublisherServiceApiClient` = 直接呼叫 Publish RPC；`PublisherClient` = 高階封裝，提供批次、併發與背景排程。
+
+差異重點:
+* 抽象層級:
+  * PublisherServiceApiClient：一呼叫一次 Publish RPC；無額外排程。
+  * PublisherClient：內建背景批次器、併發與緩衝。
+* Batching:
+  * PublisherServiceApiClient：需自行分批與控制訊息大小 (1MB 限制)。
+  * PublisherClient：自動依大小/訊息數/時間門檻切批 (可設定 BatchSettings)。
+* Flow Control / 背壓:
+  * PublisherServiceApiClient：無；你送多快就打多快，易觸發資源壓力。
+  * PublisherClient：可設定 MaxOutstandingElementCount / MaxOutstandingByteCount；超過可阻塞或擲出例外。
+* 重試與 Backoff:
+  * PublisherServiceApiClient：需自行包裝 Polly / 重試邏輯。
+  * PublisherClient：內建暫時性錯誤重試與指數退避。
+* Ordering Key:
+  * PublisherServiceApiClient：需自行確保同一 ordering key 序列化送出。
+  * PublisherClient：支援 Ordering；失敗時可停用/恢復指定 key。
+* 併發與 Thread Safety:
+  * PublisherServiceApiClient：可重用實例，但沒有幫你分散 Publish 並行。
+  * PublisherClient：執行緒安全；內部排程多個 RPC 並平衡吞吐。
+* 效能 / 延遲:
+  * PublisherServiceApiClient：單筆延遲低（無等待批次），大量高 TPS 時 RPC 過多。
+  * PublisherClient：平均延遲稍高（等待批次觸發），但高吞吐下整體資源效率佳。
+* 記憶體與緩衝:
+  * PublisherServiceApiClient：無內建緩衝；壓力直達網路與伺服端。
+  * PublisherClient：有暫存佇列；需留意過大批次設定造成記憶體佔用。
+* 錯誤處理:
+  * PublisherServiceApiClient：錯誤即時回傳；自行分類重試 / 失敗紀錄。
+  * PublisherClient：背景重試；最終失敗會從 Task 例外呈現（需觀察）。
+* 觀測性:
+  * PublisherServiceApiClient：易追蹤呼叫次數，但高頻時雜訊多。
+  * PublisherClient：需針對批次結果與佇列長度自加指標。
+* 適用情境:
+  * PublisherServiceApiClient：Bootstrap (建 Topic)、低量事件、測試、對延遲極敏感單筆操作。
+  * PublisherClient：正式高吞吐、多併發、大量小訊息、需自動批次 / 重試 / 流控。
+* 切換考量:
+  * 若現在用 PublisherServiceApiClient 且 TPS 上升或 Publish RPC 數過高 → 改用 PublisherClient。
+  * 若為稀疏事件（1 秒幾筆）不一定要換。
+
+簡短範例（省略錯誤處理）:
+```csharp
+// 低階：直接呼叫
+var service = await PublisherServiceApiClient.CreateAsync();
+await service.PublishAsync(topicName, new[] { PubsubMessage.FromData(data) });
+
+// 高階：具批次、重試
+var publisher = await PublisherClient.CreateAsync(topicName);
+await publisher.PublishAsync(data);
+```
+
+建議:
+* 立即追求穩定吞吐 → 直接選 PublisherClient。
+* 先行 PoC / 測試腳本 / 初始化腳本 → 可用 PublisherServiceApiClient；日後再抽換。
 
 ---
 ## 三種訂閱實作比較
@@ -225,21 +285,46 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/key.json
 
 適用情境：大多數實務生產服務（除非有極端特殊需求需要手寫 StreamingPull）。
 
-### 選用建議
-| 需求                               | 建議方案                                                   |
-| ---------------------------------- | ---------------------------------------------------------- |
-| 教學 / Demo / Emulator             | Pull                                                       |
-| 低量、對延遲不敏感                 | Pull 或 StartAsync                                         |
-| 一般後端服務（預設）               | StartAsync                                                 |
-| 高度客製 Flow Control / Ack 策略   | StreamingPull 手寫                                         |
-| 需要最低延遲 + 高吞吐 + 可觀測細節 | StreamingPull 或 StartAsync（先用 StartAsync，再評估優化） |
-
-### 補充：Ack 策略
-* Pull / StreamingPull：你決定何時送出 `Acknowledge` 或在 Streaming 中送 Ack Id。
-* StartAsync：回傳 `SubscriberClient.Reply.Ack / Nack`，簡化控制；若需延遲 Ack，可在 callback 內交由其他工作處理後再決定，但要避免超時（預設 Ack Deadline）。
+### StartAsync 與手寫 StreamingPull 差異
+重點對照（StartAsync 其實就是對 StreamingPull 的高階封裝）：
+* 抽象層級：
+  * StartAsync：框架管理底層 StreamingPull 生命週期（建立、錯誤、重連、關閉）。
+  * 手寫 StreamingPull：需自行維護雙向串流與讀寫協調。
+* Ack Deadline / Lease Extension：
+  * StartAsync：自動延展未 Ack 訊息的期限（避免過早重送）。
+  * 手寫：若處理時間較長需自行實作 ModifyAckDeadline / 週期續約。
+* Flow Control（流量控制）：
+  * StartAsync：可透過 SubscriberClient.Settings 設定 MaxOutstandingElementCount / MaxOutstandingByteCount。
+  * 手寫：需自行實作本地佇列、背壓（Backpressure）、暫停拉取策略。
+* 重試與重連：
+  * StartAsync：內建 transient error backoff（含 jitter）。
+  * 手寫：需自行辨識可重試錯誤、決定 backoff 策略與最大重試。
+* 併發處理模型：
+  * StartAsync：Callback 可能並行執行（受限於設定）；長時間 I/O 建議再排到工作隊列。
+  * 手寫：完全由你決定並行度（Task.Run、Channel、TPL Dataflow 等）。
+* Ack 模式：
+  * StartAsync：回傳 Ack / Nack；簡化語意。
+  * 手寫：收集 AckId 後批次送 Acknowledge；可自訂批次大小 / 時間。
+* 觀測性：
+  * StartAsync：底層細節被抽象；需透過外層計時/計數或自訂 Logger。
+  * 手寫：可在每個 StreamRead / StreamWrite / Ack 批次點插入 Metrics / Tracing。
+* 最佳化空間：
+  * StartAsync：足以滿足 90% 一般後端需求。
+  * 手寫：適合需要極致低延遲、客製批次策略、動態流控、精細錯誤分類。
+* 心智負擔：
+  * StartAsync：低；專注於業務處理。
+  * 手寫：高；需理解 Pub/Sub lease / flow control / streaming 行為。
+適用建議：
+* 先用 StartAsync 做 MVP 或直接上線；只有在出現吞吐瓶頸、流量尖峰控制或特殊 Ack 時序需求再考慮手寫。
+* 觀測到 Ack 逾時或處理阻塞 → 優先優化 callback（非同步化 / 工作分派）再評估改寫 StreamingPull。
+效能觀念：
+* 在大多數中等流量（每秒數百～數千訊息）情境下，StartAsync 與最佳化手寫 StreamingPull 差異可忽略。
+* 真正的瓶頸常在下游處理（DB / 外部 API）；先度量再重構。
 
 ### 總結
 若只是要「穩定收訊息」且沒有太特殊需求，直接使用 `SubscriberClient.StartAsync` 即可；Pull 適合學習與快速驗證；StreamingPull 手寫版保留最大彈性，適用需要深入優化或觀測的情境。
+
+
 
 ---
 ## 延伸方向

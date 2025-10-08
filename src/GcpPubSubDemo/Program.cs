@@ -44,6 +44,7 @@ else
 // 根據 UseEmulator 選擇 EmulatorDetection 與憑證
 var detection = pubSubSettings.UseEmulator ? EmulatorDetection.EmulatorOnly : EmulatorDetection.ProductionOnly;
 
+// 低階 PublisherServiceApiClient (僅在需要時建立)
 builder.Services.AddSingleton(provider =>
 {
     var b = new PublisherServiceApiClientBuilder { EmulatorDetection = detection };
@@ -53,6 +54,32 @@ builder.Services.AddSingleton(provider =>
     }
     return b.Build();
 });
+
+// 高階 PublisherClient (可選) - 僅當設定啟用時才建構與使用
+if (pubSubSettings.UseHighLevelPublisher)
+{
+    builder.Services.AddSingleton(async provider =>
+    {
+        var topicName = TopicName.FromProjectTopic(pubSubSettings.ProjectId, pubSubSettings.TopicId);
+        var b = new PublisherClientBuilder
+        {
+            TopicName = topicName,
+            EmulatorDetection = detection,
+            Settings = new PublisherClient.Settings
+            {
+                BatchingSettings = new Google.Api.Gax.BatchingSettings(
+                    elementCountThreshold: 100,
+                    byteCountThreshold: 256 * 1024, // 256KB
+                    delayThreshold: TimeSpan.FromMilliseconds(100))
+            }
+        };
+        if (!pubSubSettings.UseEmulator && !string.IsNullOrWhiteSpace(credentialsPath))
+        {
+            b.CredentialsPath = credentialsPath;
+        }
+        return await b.BuildAsync();
+    });
+}
 
 builder.Services.AddSingleton(provider =>
 {
@@ -90,7 +117,22 @@ builder.Services.AddSingleton(provider =>
     return b.Build();
 });
 
-builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
+// Conditional IPubSubPublisher 實作註冊
+if (pubSubSettings.UseHighLevelPublisher)
+{
+    // 將 async factory 解析為同步：利用 Task.GetAwaiter().GetResult()
+    builder.Services.AddSingleton<IPubSubPublisher>(provider =>
+    {
+        var publisherClientTask = provider.GetRequiredService<Task<PublisherClient>>();
+        var pc = publisherClientTask.GetAwaiter().GetResult();
+        var logger = provider.GetRequiredService<ILogger<PubSubHighLevelPublisher>>();
+        return new PubSubHighLevelPublisher(pc, logger);
+    });
+}
+else
+{
+    builder.Services.AddSingleton<IPubSubPublisher, PubSubPublisher>();
+}
 
 // 註冊三種 Subscriber 背景服務
 builder.Services.AddHostedService<PubSubSubscriber>();

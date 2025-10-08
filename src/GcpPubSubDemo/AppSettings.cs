@@ -13,6 +13,10 @@ public sealed record PubSubSettings
     /// 指向服務帳戶 JSON 檔路徑；僅在 UseEmulator = false 時使用。若為空則交由 ADC。
     /// </summary>
     public string? CredentialsPath { get; init; }
+    /// <summary>
+    /// 是否使用高階 PublisherClient (具備 batching / 背景 flush)。false 則使用低階 PublisherServiceApiClient。
+    /// </summary>
+    public bool UseHighLevelPublisher { get; init; } = false;
 }
 
 public sealed record EmulatorSettings
